@@ -3,7 +3,7 @@
 # readmdict.py
 # Octopus MDict Dictionary File (.mdx) and Resource File (.mdd) Analyser
 #
-# Copyright (C) 2012, 2013, 2015, 2022 Xiaoqiang Wang <xiaoqiangwang AT gmail DOT com>
+# Copyright (C) 2012, 2013, 2015, 2022, 2023 Xiaoqiang Wang <xiaoqiangwang AT gmail DOT com>
 #
 # This program is a free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -515,6 +515,10 @@ class MDict(object):
             yield from self._read_records_v1v2()
 
     def _read_records_v3(self):
+
+        # record index has redudant information about block compressed/decompresed size
+        record_index = self._read_record_index()
+
         f = open(self._fname, 'rb')
         f.seek(self._record_block_offset)
 
@@ -527,6 +531,16 @@ class MDict(object):
         for j in range(num_record_blocks):
             decompressed_size = self._read_int32(f)
             compressed_size = self._read_int32(f)
+
+            # check against the record index information
+            if (compressed_size + 8, decompressed_size) != record_index[j]:
+                compressed_size = record_index[j][0] - 8
+                decompressed_size = record_index[j][1]
+                # skip to the next block
+                print('Skip (potentially) damaged record block')
+                f.read(compressed_size)
+                continue
+
             record_block = self._decode_block(f.read(compressed_size), decompressed_size)
 
             # split record block according to the offset info from key block
@@ -592,6 +606,29 @@ class MDict(object):
         assert(size_counter == record_block_size)
 
         f.close()
+
+    def _read_record_index(self):
+        f = open(self._fname, 'rb')
+
+        f.seek(self._record_index_offset)
+        num_record_blocks = self._read_int32(f)
+        num_bytes = self._read_number(f)
+
+        record_index = []
+        for i in range(num_record_blocks):
+            decompressed_size = self._read_int32(f)
+            compressed_size = self._read_int32(f)
+            record_block = self._decode_block(f.read(compressed_size), decompressed_size)
+            if len(record_block) % 16 != 0:
+                raise Exception('record index block has invalid size %d' % len(record_block))
+
+            j = 0
+            while j < len(record_block):
+                block_size, decompressed_size = unpack('>QQ', record_block[j:j+16])
+                record_index.append((block_size, decompressed_size))
+                j += 16
+        f.close()
+        return record_index
 
     def _treat_record_data(self, data):
         return data
